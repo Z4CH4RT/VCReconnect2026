@@ -2,15 +2,15 @@
  * @name VCReconnect
  * @author KevDaDev (updated & fixed by Grok)
  * @description Automatically rejoins a specified voice channel when you're not in any VC (lock to enable)
- * @version 0.3.0
+ * @version 0.3.1
  * @website https://example.com (optional)
  * @source https://example.com (optional)
  */
 
 const defaultSettings = {
-    channelId: '',   // ← your target channel ID
-    username: '',                       // optional: your username (with discriminator if <2023 style) or display name
-    checkIntervalMs: 8000               // 8 seconds – not too aggressive
+    channelId: "1469136426250801152",   // ← your target channel ID
+    username: "mainstpeasant",                       // optional: your username/display name
+    checkIntervalMs: 8000               // 8 seconds
 };
 
 module.exports = class VCReconnect {
@@ -22,23 +22,34 @@ module.exports = class VCReconnect {
 
     getName()          { return "VCReconnect"; }
     getDescription()   { return "Auto-rejoins your chosen VC when disconnected / not in voice."; }
-    getVersion()       { return "0.3.0"; }
+    getVersion()       { return "0.3.1"; }
     getAuthor()        { return "KevDaDev (updated)"; }
+
+    // Helper to show toast safely
+    showToast(message, options = {}) {
+        if (BdApi?.UI?.showToast) {
+            BdApi.UI.showToast(message, options);
+        } else if (BdApi?.showToast) {
+            // Fallback for very old BD versions
+            BdApi.showToast(message, options);
+        } else {
+            console.log("[VCReconnect Toast Fallback]", message);
+        }
+    }
 
     start() {
         this.settings = { ...defaultSettings, ...BdApi.Data.load(this.getName(), "settings") };
         this.addLockButton();
-        BdApi.showToast("VCReconnect loaded", {type: "success", icon: true});
+        this.showToast("VCReconnect loaded", {type: "success", icon: true});
     }
 
     stop() {
         this.unlock();
         this.removeLockButton();
-        BdApi.showToast("VCReconnect unloaded", {type: "info"});
+        this.showToast("VCReconnect unloaded", {type: "info"});
     }
 
     addLockButton() {
-        // User controls area (mute/deafen panel)
         const waitForPanel = setInterval(() => {
             const panel = document.querySelector('section[aria-label="User area"]') ||
                           document.querySelector('[aria-label="User Controls"]') ||
@@ -68,7 +79,7 @@ module.exports = class VCReconnect {
             wrapper.style.padding = "4px 8px";
             wrapper.appendChild(btn);
 
-            panel.appendChild(wrapper); // or insertBefore(lastChild) if you prefer left side
+            panel.appendChild(wrapper);
             this.updateButton();
         }, 300);
     }
@@ -84,19 +95,19 @@ module.exports = class VCReconnect {
         btn.innerHTML = this.isLocked
             ? `Unlock VC (${this.rejoinCount})`
             : `Lock VC (${this.rejoinCount})`;
-        btn.classList.toggle("buttonActive_ae686f", this.isLocked); // active style if exists
+        btn.classList.toggle("buttonActive_ae686f", this.isLocked);
     }
 
     lock() {
         if (!this.settings.channelId) {
-            BdApi.showToast("Set a Channel ID in settings first!", {type: "error"});
+            this.showToast("Set a Channel ID in settings first!", {type: "error"});
             return;
         }
 
         this.isLocked = true;
         this.rejoinCount = 0;
         this.startInterval();
-        BdApi.showToast("VC locked – will auto-rejoin when not connected", {type: "success"});
+        this.showToast("VC locked – will auto-rejoin when not connected", {type: "success"});
         this.updateButton();
     }
 
@@ -106,13 +117,12 @@ module.exports = class VCReconnect {
             this.interval = null;
         }
         this.isLocked = false;
-        BdApi.showToast("VC unlocked", {type: "info"});
+        this.showToast("VC unlocked", {type: "info"});
         this.updateButton();
     }
 
     startInterval() {
         if (this.interval) clearInterval(this.interval);
-
         this.interval = setInterval(() => this.checkAndRejoin(), this.settings.checkIntervalMs);
     }
 
@@ -124,23 +134,18 @@ module.exports = class VCReconnect {
         if (!VoiceStateStore || !currentUser) return;
 
         const myState = VoiceStateStore.getVoiceStateForUser(currentUser.id);
-        if (myState?.channelId) return; // already in a VC → skip
-
-        // Optional: check username if set
-        if (this.settings.username) {
-            // Could add extra check here if needed – but usually channelId check is enough
-        }
+        if (myState?.channelId) return; // already in VC
 
         const selectVoiceChannel = BdApi.Webpack.getModule(m => m?.selectVoiceChannel)?.selectVoiceChannel;
         if (!selectVoiceChannel) {
             console.warn("[VCReconnect] selectVoiceChannel not found");
-            BdApi.showToast("Cannot join – Discord API changed?", {type: "error"});
+            this.showToast("Cannot join – Discord API changed?", {type: "error"});
             return;
         }
 
         selectVoiceChannel(this.settings.channelId);
         this.rejoinCount++;
-        BdApi.showToast(`Rejoining VC... (${this.rejoinCount})`, {type: "info"});
+        this.showToast(`Rejoining VC... (${this.rejoinCount})`, {type: "info"});
         this.updateButton();
     }
 
@@ -155,14 +160,14 @@ module.exports = class VCReconnect {
                 <input type="text" id="chId" value="${this.settings.channelId}" style="width:100%; margin:6px 0;">
             </div>
             <div style="margin:10px 0;">
-                <label>Your Username (optional – helps in rare cases)</label><br>
+                <label>Your Username (optional)</label><br>
                 <input type="text" id="usr" value="${this.settings.username}" style="width:100%; margin:6px 0;">
             </div>
             <div style="margin:10px 0;">
                 <label>Check interval (ms)</label><br>
                 <input type="number" id="int" value="${this.settings.checkIntervalMs}" min="3000" step="1000" style="width:100%; margin:6px 0;">
             </div>
-            <small style="color:#b9b9b9;">Tip: You must keep the server open/visible.</small>
+            <small style="color:#b9b9b9;">Tip: Keep the server visible/open.</small>
         `;
 
         panel.querySelector("#chId").onchange = e => {
