@@ -1,10 +1,8 @@
 /**
  * @name VCReconnect
- * @author KevDaDev (updated & fixed by Grok)
- * @description Automatically rejoins a specified voice channel when you're not in any VC (lock to enable)
- * @version 0.3.2
- * @website https://example.com
- * @source https://example.com
+ * @author KevDaDev (updated & fixed by Grok - v0.3.3)
+ * @description Automatically rejoins specified VC when not in any (lock to enable)
+ * @version 0.3.3
  */
 
 const defaultSettings = {
@@ -21,163 +19,140 @@ module.exports = class VCReconnect {
     rejoinCount = 0;
     observer = null;
     button = null;
+    injectionInterval = null;
 
     getName() { return "VCReconnect"; }
-    getDescription() { return "Auto-rejoins your chosen VC when disconnected / not in voice."; }
-    getVersion() { return "0.3.2"; }
+    getDescription() { return "Auto-rejoins chosen VC when disconnected."; }
+    getVersion() { return "0.3.3"; }
     getAuthor() { return "KevDaDev (updated)"; }
 
-    showToast(message, options = {}) {
+    showToast(msg, opts = {}) {
         try {
-            if (BdApi?.UI?.showToast) return BdApi.UI.showToast(message, options);
-            if (BdApi?.showToast) return BdApi.showToast(message, options);
-            console.log(`[VCReconnect] ${message}`);
-        } catch(e) {
-            console.log(`[VCReconnect] ${message}`);
-        }
+            (BdApi.UI?.showToast ?? BdApi.showToast ?? console.log.bind(console, "[VCReconnect Toast]"))(msg, opts);
+        } catch {}
     }
 
     start() {
         this.settings = { ...defaultSettings, ...BdApi.Data.load(this.getName(), "settings") };
-        this.setupButtonObserver();
-        this.showToast("VCReconnect loaded – watching for user panel", {type: "success"});
-        console.log("[VCReconnect] Started. Open a voice channel/server to see Lock button.");
+        this.setupInjection();
+        this.showToast("VCReconnect v0.3.3 loaded – check console for debug", {type: "success"});
+        console.log("[VCReconnect] Plugin started. Reload Discord or join/leave VC to trigger button.");
     }
 
     stop() {
         this.unlock();
         if (this.observer) this.observer.disconnect();
+        if (this.injectionInterval) clearInterval(this.injectionInterval);
         this.removeButton();
         this.showToast("VCReconnect stopped", {type: "info"});
     }
 
-    // 🔥 NEW: Robust button injection with MutationObserver
-    setupButtonObserver() {
-        const selectors = [
-            '[class*="userPanel"]',           // Main user panel
-            '[class*="voiceStatus"]',         // Voice status area
-            'section[aria-label*="Account"]', // Account section
-            '[class*="container-"][class*="userPopout"]', // Popout wrappers
-            '.container-1giJp5',              // Legacy fallback
-            '[data-list-id="voice-users"] ~ *', // Near voice user list
-            'div[role="toolbar"] button:last-of-type' // Mute/deafen toolbar
-        ];
+    setupInjection() {
+        // MutationObserver on body for dynamic inserts
+        this.observer = new MutationObserver(() => this.tryInjectButton());
+        this.observer.observe(document.body, { childList: true, subtree: true });
 
-        this.observer = new MutationObserver(() => {
-            this.injectButton();
-        });
+        // Periodic retry (every 2s for first 20s, then slower)
+        this.injectionInterval = setInterval(() => this.tryInjectButton(), 2000);
+        setTimeout(() => {
+            if (this.injectionInterval) clearInterval(this.injectionInterval);
+        }, 20000);
 
-        // Start observing common root containers
-        this.observer.observe(document.body, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['class']
-        });
-
-        // Immediate injection attempt
-        setTimeout(() => this.injectButton(), 1000);
-        // Retry every 3s for 30s (handles slow loads)
-        const retries = setInterval(() => {
-            this.injectButton();
-            if (this.button) clearInterval(retries);
-        }, 3000);
-        setTimeout(() => clearInterval(retries), 30000);
+        // Initial attempts
+        setTimeout(() => this.tryInjectButton(), 500);
+        setTimeout(() => this.tryInjectButton(), 1500);
     }
 
-    injectButton() {
-        if (this.button) return; // Already have one
+    tryInjectButton() {
+        if (this.button) return; // Already injected
 
-        // Find any user/voice control panel
-        const panel = Array.from(document.querySelectorAll([
-            '[class*="userPanel"]',
-            '[class*="voiceStatus"]',
-            'section[aria-label*="Account"]',
-            '.container-1giJp5',
-            '[class*="layout-"] > [class*="button-"]'
-        ].join(','))).find(p => 
-            p.querySelector('[class*="muteButton"], [class*="deafenButton"], [aria-label*="Microphone"], [aria-label*="Speakers"]')
-        );
+        // Target common 2025-2026 mute/deafen container selectors
+        const possibleContainers = document.querySelectorAll([
+            '[class*="voiceControls"]',
+            '[class*="withTagAsButton"]',
+            '[class*="container"][class*="user"]',
+            'section[aria-label*="user" i]',
+            '[aria-label*="Mute microphone" i] ~ *',
+            '[aria-label*="Deafen" i] ~ *',
+            '.buttonContainer-',
+            '[role="toolbar"]',
+            '[class*="bottomControls-"]',
+            '[class*="controls-"] button'
+        ].join(', '));
 
-        if (!panel) {
-            console.log("[VCReconnect] No user panel found yet...");
+        let targetPanel = null;
+        for (const el of possibleContainers) {
+            // Look for mute or deafen button nearby (aria-label is stable)
+            if (el.querySelector('[aria-label*="Mute"], [aria-label*="Deafen"], [aria-label*="Microphone Muted"]')) {
+                targetPanel = el;
+                break;
+            }
+        }
+
+        if (!targetPanel) {
+            console.log("[VCReconnect] No suitable panel found yet. Try joining a voice channel.");
             return;
         }
 
-        console.log("[VCReconnect] Found panel:", panel);
+        console.log("[VCReconnect] Found target panel:", targetPanel);
 
-        // Remove any existing
-        this.removeButton();
+        this.removeButton(); // Clean old if any
 
-        // Create button
         this.button = document.createElement("button");
         this.button.id = "vcreconnect-lock-btn";
-        this.button.className = [
-            "button-56b2cF", "button-3bW-PT", "buttonColor-3i1Yze", 
-            "colorBrand-3pXr91", "sizeMedium-1MuvfX", "grow-1vLImu",
-            "button-3bW-PT"  // 2026 classes – adjust if needed
-        ].join(" ");
-        this.button.style.cssText = `
-            margin-left: 8px; min-width: 85px; height: 32px; 
-            font-size: 14px; border-radius: 4px;
-        `;
-        this.button.innerHTML = this.isLocked ? "🔓 Unlock VC" : "🔒 Lock VC";
+        this.button.innerHTML = this.isLocked ? "🔓 Unlock" : "🔒 Lock VC";
         this.button.title = "VCReconnect: Toggle auto-rejoin";
+        this.button.style.cssText = `
+            margin: 0 4px; padding: 0 8px; height: 24px; line-height: 24px;
+            font-size: 13px; border-radius: 3px; cursor: pointer;
+            background: ${this.isLocked ? '#5865F2' : '#4F545C'};
+            color: white; border: none;
+        `;
 
-        this.button.onclick = (e) => {
-            e.stopPropagation();
+        this.button.onclick = () => {
             if (this.isLocked) this.unlock();
             else this.lock();
             this.updateButton();
         };
 
-        // Insert after mute/deafen buttons
-        const insertAfter = panel.querySelector('[class*="mute"], [class*="deafen"], [aria-label*="Microphone"], button:last-of-type');
-        if (insertAfter) {
-            insertAfter.parentNode.insertBefore(this.button, insertAfter.nextSibling);
-        } else {
-            panel.appendChild(this.button);
-        }
+        // Insert near mute/deafen (after last button in toolbar)
+        const insertPoint = targetPanel.querySelector('button:last-child') || targetPanel;
+        insertPoint.parentNode?.insertBefore(this.button, insertPoint.nextSibling) ||
+            insertPoint.appendChild(this.button);
 
+        console.log("[VCReconnect] Button injected successfully!");
+        this.showToast("Lock button added near mute/deafen", {type: "success"});
         this.updateButton();
-        console.log("[VCReconnect] Lock button injected!");
-        this.showToast("Lock VC button added (near mute/deafen)", {type: "success"});
     }
 
     removeButton() {
-        const oldBtn = document.getElementById("vcreconnect-lock-btn");
-        if (oldBtn) oldBtn.remove();
+        document.getElementById("vcreconnect-lock-btn")?.remove();
         this.button = null;
     }
 
     updateButton() {
         if (!this.button) return;
-        this.button.innerHTML = this.isLocked 
-            ? `🔓 Unlock (${this.rejoinCount})` 
-            : `🔒 Lock VC (${this.rejoinCount})`;
-        this.button.style.opacity = this.isLocked ? "1" : "0.8";
-        this.button.style.backgroundColor = this.isLocked ? "#59A6FF" : "";
+        this.button.innerHTML = this.isLocked ? `🔓 Unlock (${this.rejoinCount})` : `🔒 Lock (${this.rejoinCount})`;
+        this.button.style.background = this.isLocked ? '#5865F2' : '#4F545C';
     }
 
     lock() {
-        if (!this.settings.channelId?.trim()) {
-            this.showToast("❌ Set Channel ID in plugin settings first!", {type: "error"});
+        if (!this.settings.channelId.trim()) {
+            this.showToast("Set Channel ID first!", {type: "error"});
             return;
         }
         this.isLocked = true;
         this.rejoinCount = 0;
         this.startInterval();
-        this.showToast(`✅ Locked to VC ${this.settings.channelId.slice(-4)} – auto-rejoin ON`, {type: "success"});
+        this.showToast("VC locked – auto-rejoin enabled", {type: "success"});
         this.updateButton();
     }
 
     unlock() {
-        if (this.interval) {
-            clearInterval(this.interval);
-            this.interval = null;
-        }
+        if (this.interval) clearInterval(this.interval);
+        this.interval = null;
         this.isLocked = false;
-        this.showToast("🔓 Unlocked – auto-rejoin OFF", {type: "info"});
+        this.showToast("VC unlocked", {type: "info"});
         this.updateButton();
     }
 
@@ -189,80 +164,50 @@ module.exports = class VCReconnect {
     checkAndRejoin() {
         if (!this.isLocked) return;
 
-        // Get voice state modules (more robust finders)
-        const VoiceModule = BdApi.Webpack.getModule(m => m.getVoiceStateForUser && m.getSelfVoiceState);
-        const UserModule = BdApi.Webpack.getModule(m => m.getCurrentUser);
-        
-        if (!VoiceModule || !UserModule) {
-            console.warn("[VCReconnect] Missing voice/user modules");
+        const VoiceStore = BdApi.Webpack.getModule(m => m.getVoiceStateForUser || m.getSelfVoiceState);
+        const UserStore = BdApi.Webpack.getModule(m => m.getCurrentUser);
+
+        const user = UserStore?.getCurrentUser?.();
+        if (!user) return;
+
+        const state = VoiceStore?.getVoiceStateForUser?.(user.id) || VoiceStore?.getSelfVoiceState?.();
+        if (state?.channelId) return; // In VC
+
+        const joinModule = BdApi.Webpack.getModule(m => m.selectVoiceChannel);
+        if (!joinModule?.selectVoiceChannel) {
+            console.warn("[VCReconnect] No selectVoiceChannel found");
+            this.showToast("Join API missing – Discord update?", {type: "error"});
             return;
         }
 
-        const currentUser = UserModule.getCurrentUser();
-        const myVoiceState = VoiceModule.getVoiceStateForUser ? 
-            VoiceModule.getVoiceStateForUser(currentUser.id) : 
-            VoiceModule.getSelfVoiceState?.();
-
-        if (myVoiceState?.channelId) {
-            return; // Already in VC
-        }
-
-        // Join VC
-        const ChannelModule = BdApi.Webpack.getModule(m => m.selectVoiceChannel || m.joinVoiceChannel);
-        const joinFunc = ChannelModule?.selectVoiceChannel || ChannelModule?.transitionToVoiceChannel;
-        
-        if (!joinFunc) {
-            this.showToast("⚠️ Discord API changed – update plugin", {type: "error"});
-            console.error("[VCReconnect] No join function found");
-            return;
-        }
-
-        try {
-            joinFunc(this.settings.channelId);
-            this.rejoinCount++;
-            this.showToast(`🔄 Rejoined VC #${this.rejoinCount}`, {type: "info"});
-            this.updateButton();
-        } catch(e) {
-            console.error("[VCReconnect] Join failed:", e);
-        }
+        joinModule.selectVoiceChannel(this.settings.channelId);
+        this.rejoinCount++;
+        this.showToast(`Rejoined VC (${this.rejoinCount})`, {type: "info"});
+        this.updateButton();
     }
 
     getSettingsPanel() {
-        const panel = document.createElement("div");
-        panel.style.padding = "16px; font-family: Whitney, sans-serif;";
-        panel.innerHTML = `
-            <div style="margin-bottom: 20px;">
-                <h3 style="color: #fff; margin: 0 0 12px 0;">🔒 VCReconnect Settings</h3>
-                <label style="color: #dcddde; font-size: 14px;">Target Voice Channel ID</label><br>
-                <input id="chId" value="${this.settings.channelId}" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #40444a; background: #36393f; color: #dcddde;">
-                
-                <label style="color: #dcddde; font-size: 14px; margin-top: 12px; display: block;">Your Username (optional)</label><br>
-                <input id="usr" value="${this.settings.username}" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #40444a; background: #36393f; color: #dcddde;">
-                
-                <label style="color: #dcddde; font-size: 14px; margin-top: 12px; display: block;">Check Interval (ms) <small>(min 3000)</small></label><br>
-                <input id="int" type="number" value="${this.settings.checkIntervalMs}" min="3000" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #40444a; background: #36393f; color: #dcddde;">
-            </div>
-            <div style="font-size: 12px; color: #72767d; border-top: 1px solid #40444a; padding-top: 12px;">
-                💡 <strong>Usage:</strong> Set Channel ID → Save → Join any VC → Lock button appears near Mute/Deafen → Click to enable auto-rejoin.<br>
-                Target: <code>${this.settings.channelId.slice(-6)}</code> | Status: ${this.isLocked ? '🟢 LOCKED' : '🔴 UNLOCKED'}
-            </div>
+        const div = document.createElement("div");
+        div.style.padding = "10px";
+        div.innerHTML = `
+            <h3>VCReconnect Settings (v0.3.3)</h3>
+            <label>Channel ID:</label><br>
+            <input id="cid" value="${this.settings.channelId}" style="width:100%; margin:8px 0;"><br>
+            <label>Username (optional):</label><br>
+            <input id="usr" value="${this.settings.username}" style="width:100%; margin:8px 0;"><br>
+            <label>Check interval (ms):</label><br>
+            <input id="intv" type="number" value="${this.settings.checkIntervalMs}" min="3000" style="width:100%; margin:8px 0;"><br>
+            <small>Tip: Join any VC in the server to make the lock button appear near mute/deafen.</small>
         `;
 
-        // Event listeners
-        panel.querySelector("#chId").oninput = e => {
-            this.settings.channelId = e.target.value.trim();
-            BdApi.Data.save(this.getName(), "settings", this.settings);
-        };
-        panel.querySelector("#usr").oninput = e => {
-            this.settings.username = e.target.value.trim();
-            BdApi.Data.save(this.getName(), "settings", this.settings);
-        };
-        panel.querySelector("#int").oninput = e => {
-            this.settings.checkIntervalMs = Math.max(3000, parseInt(e.target.value) || 8000);
+        div.querySelector("#cid").onchange = e => { this.settings.channelId = e.target.value.trim(); BdApi.Data.save(this.getName(), "settings", this.settings); };
+        div.querySelector("#usr").onchange = e => { this.settings.username = e.target.value.trim(); BdApi.Data.save(this.getName(), "settings", this.settings); };
+        div.querySelector("#intv").onchange = e => {
+            this.settings.checkIntervalMs = Math.max(3000, +e.target.value || 8000);
             BdApi.Data.save(this.getName(), "settings", this.settings);
             if (this.isLocked) this.startInterval();
         };
 
-        return panel;
+        return div;
     }
 };
