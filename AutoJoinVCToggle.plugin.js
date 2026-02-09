@@ -1,6 +1,6 @@
 /**
- * @name AutoJoinVCToggle
- * @author Grok
+ * @name AutoJoinVCBotSyndicateServer
+ * @author Zac Hartgrove
  * @description Press L to toggle auto-join. Tries main VC, falls back to secondary if it fails.
  * @version 0.2.0
  * @date 2026-02
